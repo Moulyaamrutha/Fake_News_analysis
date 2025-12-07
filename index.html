@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Fake News Predictor</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+<style>
+    body {
+        background: #0f1724;
+        color: #e6eef8;
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 20px;
+    }
+
+    h1 {
+        font-size: 26px;
+        margin-bottom: 10px;
+    }
+
+    .container {
+        max-width: 900px;
+        margin: auto;
+    }
+
+    textarea {
+        width: 100%;
+        height: 150px;
+        padding: 12px;
+        background: #0b1220;
+        border: 1px solid #222;
+        border-radius: 8px;
+        color: #e6eef8;
+        font-size: 14px;
+    }
+
+    button {
+        padding: 10px 16px;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-weight: bold;
+    }
+
+    #predictBtn {
+        background: #3b82f6;
+        color: white;
+    }
+
+    #clearBtn {
+        background: #475569;
+        color: white;
+    }
+
+    .row {
+        margin-top: 15px;
+        display: flex;
+        gap: 10px;
+    }
+
+    #resultBlock {
+        margin-top: 25px;
+        padding: 15px;
+        background: #0b1220;
+        border-radius: 10px;
+        border: 1px solid #222;
+    }
+
+    #history {
+        margin-top: 25px;
+        background: #0b1220;
+        border-radius: 10px;
+        padding: 12px;
+        border: 1px solid #222;
+    }
+
+    .history-item {
+        padding: 8px;
+        border-bottom: 1px solid #222;
+        font-size: 14px;
+    }
+
+    .history-item:last-child {
+        border-bottom: none;
+    }
+
+</style>
+</head>
+<body>
+
+<div class="container">
+
+    <h1>Fake News Predictor</h1>
+
+    <label>Enter news text:</label>
+    <textarea id="inputText" placeholder="Type or paste news text here..."></textarea>
+
+    <div class="row">
+        <button id="predictBtn">Predict</button>
+        <button id="clearBtn">Clear</button>
+
+        <select id="modelSelect">
+            <option value="">Auto</option>
+            <option value="logistic">Logistic</option>
+            <option value="svm">SVM</option>
+            <option value="xgb">XGBoost</option>
+            <option value="bilstm">BiLSTM</option>
+            <option value="transformer">Transformer</option>
+        </select>
+    </div>
+
+    <div id="resultBlock">
+        <h3>Prediction Result</h3>
+        <p><strong>Label:</strong> <span id="resultLabel">—</span></p>
+        <p><strong>Probability:</strong> <span id="probText">—</span></p>
+        <p><strong>Model Used:</strong> <span id="resultModel">—</span></p>
+
+        <canvas id="probChart" width="180" height="180"></canvas>
+    </div>
+
+    <div id="history">
+        <h3>Prediction History</h3>
+        <div id="historyList"></div>
+    </div>
+
+</div>
+
+<script>
+/***************************************************
+ FIXED CONFIGURATION
+***************************************************/
+const API_URL = "http://127.0.0.1:8000";   // ALWAYS SEND FAILING CALLS HERE
+
+console.log("Frontend using API:", API_URL);
+
+/***************************************************
+ ELEMENTS
+***************************************************/
+const inputText = document.getElementById("inputText");
+const predictBtn = document.getElementById("predictBtn");
+const clearBtn   = document.getElementById("clearBtn");
+const resultLabel = document.getElementById("resultLabel");
+const probText = document.getElementById("probText");
+const resultModel = document.getElementById("resultModel");
+const modelSelect = document.getElementById("modelSelect");
+const historyList = document.getElementById("historyList");
+
+let predictionHistory = [];
+
+/***************************************************
+ CHART SETUP
+***************************************************/
+const probChart = new Chart(document.getElementById("probChart").getContext("2d"), {
+    type: "doughnut",
+    data: {
+        labels: ["Real", "Fake"],
+        datasets: [{
+            data: [0, 1],
+            backgroundColor: ["green", "red"],
+        }]
+    },
+    options: { responsive: false }
+});
+
+function updateChart(prob) {
+    probChart.data.datasets[0].data = [prob, 1-prob];
+    probChart.update();
+}
+
+/***************************************************
+ PREDICT FUNCTION (CALLING FASTAPI)
+***************************************************/
+async function predict() {
+    const text = inputText.value.trim();
+
+    if (!text) {
+        alert("Enter some text.");
+        return;
+    }
+
+    const model = modelSelect.value || null;
+
+    const payload = {
+        text: text,
+        model_name: model
+    };
+
+    try {
+        const response = await fetch(`${API_URL}/predict`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            const errText = await response.text();
+            throw new Error("Server responded with " + response.status + ": " + errText);
+        }
+
+        const data = await response.json();
+
+        resultLabel.textContent = data.prediction === 1 ? "REAL" : "FAKE";
+        probText.textContent = (data.probability * 100).toFixed(2) + "%";
+        resultModel.textContent = data.model;
+
+        updateChart(data.probability);
+
+        predictionHistory.push({
+            text: text,
+            prediction: data.prediction,
+            probability: data.probability,
+            model: data.model,
+            ts: new Date().toLocaleString()
+        });
+
+        renderHistory();
+
+    } catch (err) {
+        console.error(err);
+        alert("Prediction failed: " + err.message);
+    }
+}
+
+/***************************************************
+ HISTORY RENDERING
+***************************************************/
+function renderHistory() {
+    historyList.innerHTML = "";
+    predictionHistory.slice().reverse().forEach(item => {
+        const div = document.createElement("div");
+        div.className = "history-item";
+        div.innerHTML = `
+            <strong>${item.prediction === 1 ? "REAL" : "FAKE"}</strong>
+            — ${(item.probability * 100).toFixed(1)}%  
+            <br>
+            <span style="color:#999">${item.text.substring(0, 80)}...</span>
+            <br>
+            <span style="font-size:12px;color:#555">${item.ts}</span>
+        `;
+        historyList.appendChild(div);
+    });
+}
+
+/***************************************************
+ BUTTON EVENTS
+***************************************************/
+predictBtn.onclick = predict;
+
+clearBtn.onclick = () => {
+    inputText.value = "";
+    resultLabel.textContent = "—";
+    probText.textContent = "—";
+    resultModel.textContent = "—";
+    updateChart(0);
+};
+</script>
+
+</body>
+</html>
